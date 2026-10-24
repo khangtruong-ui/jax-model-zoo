@@ -117,6 +117,7 @@ class CLIPVisionConfig(BaseModelConfig):
     layers: int = 12
     heads: int = 12
     output_dim: int = 512
+    mlp_dim: Optional[int] = None
     act_layer: str = "quick_gelu"
 
 
@@ -128,6 +129,10 @@ class CLIPTextConfig(BaseModelConfig):
     vocab_size: int = 49408
     width: int = 512
     heads: int = 8
+    layers: int = 12
+    output_dim: int = 512
+    mlp_dim: Optional[int] = None
+    act_layer: str = "quick_gelu"
     layers: int = 12
     output_dim: int = 512
     act_layer: str = "quick_gelu"

@@ -16,6 +16,58 @@ def quick_gelu(x: jax.Array) -> jax.Array:
     return x * jax.nn.sigmoid(1.702 * x)
 
 
+class CLIPAttention(nn.Module):
+    d_model: int
+    n_head: int
+
+    @nn.compact
+    def __call__(self, x: jax.Array, mask: Optional[jax.Array] = None) -> jax.Array:
+        b, seq_len, _ = x.shape
+        head_dim = self.d_model // self.n_head
+        scale = 1.0 / np.sqrt(head_dim)
+
+        q = nn.Dense(self.d_model, name="q_proj")(x)
+        k = nn.Dense(self.d_model, name="k_proj")(x)
+        v = nn.Dense(self.d_model, name="v_proj")(x)
+
+        q = q.reshape((b, seq_len, self.n_head, head_dim)).swapaxes(1, 2)
+        k = k.reshape((b, seq_len, self.n_head, head_dim)).swapaxes(1, 2)
+        v = v.reshape((b, seq_len, self.n_head, head_dim)).swapaxes(1, 2)
+
+        scores = jnp.matmul(q, k.swapaxes(-1, -2)) * scale
+        if mask is not None:
+            scores = scores + mask
+        weights = jax.nn.softmax(scores, axis=-1)
+        out = jnp.matmul(weights, v).swapaxes(1, 2).reshape((b, seq_len, self.d_model))
+        return nn.Dense(self.d_model, name="out_proj")(out)
+
+
+class CLIPMLP(nn.Module):
+    d_model: int
+    mlp_dim: Optional[int] = None
+
+    @nn.compact
+    def __call__(self, x: jax.Array) -> jax.Array:
+        dim = self.mlp_dim or (self.d_model * 4)
+        h = nn.Dense(dim, name="c_fc")(x)
+        h = quick_gelu(h)
+        return nn.Dense(self.d_model, name="c_proj")(h)
+
+
+class ResidualAttentionBlock(nn.Module):
+    d_model: int
+    n_head: int
+    mlp_dim: Optional[int] = None
+
+    @nn.compact
+    def __call__(self, x: jax.Array, mask: Optional[jax.Array] = None) -> jax.Array:
+        norm1 = nn.LayerNorm(epsilon=1e-5, name="ln_1")(x)
+        x = x + CLIPAttention(d_model=self.d_model, n_head=self.n_head, name="attn")(norm1, mask=mask)
+        norm2 = nn.LayerNorm(epsilon=1e-5, name="ln_2")(x)
+        x = x + CLIPMLP(d_model=self.d_model, mlp_dim=self.mlp_dim, name="mlp")(norm2)
+        return x
+
+
 class CLIPVisionTransformer(nn.Module):
     """Vision Transformer backbone for CLIP."""
 
@@ -55,36 +107,19 @@ class CLIPVisionTransformer(nn.Module):
         x = x + pos_embed[None, :, :]
 
         # 4. Pre-LN
-        x = nn.LayerNorm(name="ln_pre")(x)
+        x = nn.LayerNorm(epsilon=1e-5, name="ln_pre")(x)
 
         # 5. Transformer blocks
         for i in range(self.config.layers):
-            # Self-attention
-            res = x
-            norm1 = nn.LayerNorm(name=f"resblocks_{i}_ln_1")(x)
-            head_dim = self.config.width // self.config.heads
-            qkv = nn.Dense(self.config.width * 3, use_bias=True, name=f"resblocks_{i}_attn_qkv")(norm1)
-            qkv = qkv.reshape((b, -1, 3, self.config.heads, head_dim))
-            qkv = jnp.transpose(qkv, (2, 0, 3, 1, 4))
-            q, k, v = qkv[0], qkv[1], qkv[2]
-            scale = 1.0 / np.sqrt(head_dim)
-            attn_weights = jax.nn.softmax(jnp.matmul(q, jnp.swapaxes(k, -1, -2)) * scale, axis=-1)
-            attn_out = jnp.matmul(attn_weights, v)
-            attn_out = jnp.swapaxes(attn_out, 1, 2).reshape((b, -1, self.config.width))
-            attn_out = nn.Dense(self.config.width, use_bias=True, name=f"resblocks_{i}_attn_out_proj")(attn_out)
-            x = res + attn_out
-
-            # MLP
-            res = x
-            norm2 = nn.LayerNorm(name=f"resblocks_{i}_ln_2")(x)
-            mlp_dim = self.config.width * 4
-            h = nn.Dense(mlp_dim, use_bias=True, name=f"resblocks_{i}_mlp_c_fc")(norm2)
-            h = quick_gelu(h)
-            h = nn.Dense(self.config.width, use_bias=True, name=f"resblocks_{i}_mlp_c_proj")(h)
-            x = res + h
+            x = ResidualAttentionBlock(
+                d_model=self.config.width,
+                n_head=self.config.heads,
+                mlp_dim=self.config.mlp_dim,
+                name=f"resblocks_{i}",
+            )(x)
 
         # 6. Post-LN on CLS token
-        x = nn.LayerNorm(name="ln_post")(x[:, 0])
+        x = nn.LayerNorm(epsilon=1e-5, name="ln_post")(x[:, 0])
 
         # 7. Projection head
         out = nn.Dense(self.config.output_dim, use_bias=False, name="proj")(x)
@@ -125,32 +160,16 @@ class CLIPTextTransformer(nn.Module):
         # 2. Transformer blocks
         hidden_states = []
         for i in range(self.config.layers):
-            res = x
-            norm1 = nn.LayerNorm(name=f"resblocks_{i}_ln_1")(x)
-            head_dim = self.config.width // self.config.heads
-            qkv = nn.Dense(self.config.width * 3, use_bias=True, name=f"resblocks_{i}_attn_qkv")(norm1)
-            qkv = qkv.reshape((b, seq_len, 3, self.config.heads, head_dim))
-            qkv = jnp.transpose(qkv, (2, 0, 3, 1, 4))
-            q, k, v = qkv[0], qkv[1], qkv[2]
-            scale = 1.0 / np.sqrt(head_dim)
-            attn_scores = jnp.matmul(q, jnp.swapaxes(k, -1, -2)) * scale + mask[None, None, :, :]
-            attn_weights = jax.nn.softmax(attn_scores, axis=-1)
-            attn_out = jnp.matmul(attn_weights, v)
-            attn_out = jnp.swapaxes(attn_out, 1, 2).reshape((b, seq_len, self.config.width))
-            attn_out = nn.Dense(self.config.width, use_bias=True, name=f"resblocks_{i}_attn_out_proj")(attn_out)
-            x = res + attn_out
-
-            res = x
-            norm2 = nn.LayerNorm(name=f"resblocks_{i}_ln_2")(x)
-            mlp_dim = self.config.width * 4
-            h = nn.Dense(mlp_dim, use_bias=True, name=f"resblocks_{i}_mlp_c_fc")(norm2)
-            h = quick_gelu(h)
-            h = nn.Dense(self.config.width, use_bias=True, name=f"resblocks_{i}_mlp_c_proj")(h)
-            x = res + h
+            x = ResidualAttentionBlock(
+                d_model=self.config.width,
+                n_head=self.config.heads,
+                mlp_dim=self.config.mlp_dim,
+                name=f"resblocks_{i}",
+            )(x, mask=mask)
             hidden_states.append(x)
 
         # 3. Final LayerNorm
-        x_norm = nn.LayerNorm(name="ln_final")(x)
+        x_norm = nn.LayerNorm(epsilon=1e-5, name="ln_final")(x)
 
         # 4. Feature at EOT token
         eot_indices = jnp.argmax(input_ids, axis=-1)
@@ -158,6 +177,10 @@ class CLIPTextTransformer(nn.Module):
 
         # 5. Projection
         out = nn.Dense(self.config.output_dim, use_bias=False, name="text_projection")(pooled)
+
+        if return_hidden_states:
+            return out, x_norm
+        return out
 
         if return_hidden_states:
             return out, x_norm

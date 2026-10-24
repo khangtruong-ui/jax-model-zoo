@@ -50,17 +50,17 @@ class UNetResnetBlock(nn.Module):
     @nn.compact
     def __call__(self, x: jax.Array, time_emb: Optional[jax.Array] = None) -> jax.Array:
         res = x
-        h = nn.GroupNorm(num_groups=self.groups, name="norm1")(x)
+        h = nn.GroupNorm(num_groups=self.groups, epsilon=1e-6, name="norm1")(x)
         h = jax.nn.silu(h)
-        h = nn.Conv(self.out_channels, kernel_size=(3, 3), padding="SAME", name="conv1")(h)
+        h = nn.Conv(self.out_channels, kernel_size=(3, 3), padding=[(1, 1), (1, 1)], name="conv1")(h)
 
         if time_emb is not None:
             time_proj = nn.Dense(self.out_channels, name="time_emb_proj")(jax.nn.silu(time_emb))
             h = h + time_proj[:, None, None, :]
 
-        h = nn.GroupNorm(num_groups=self.groups, name="norm2")(h)
+        h = nn.GroupNorm(num_groups=self.groups, epsilon=1e-6, name="norm2")(h)
         h = jax.nn.silu(h)
-        h = nn.Conv(self.out_channels, kernel_size=(3, 3), padding="SAME", name="conv2")(h)
+        h = nn.Conv(self.out_channels, kernel_size=(3, 3), padding=[(1, 1), (1, 1)], name="conv2")(h)
 
         if self.in_channels != self.out_channels:
             res = nn.Conv(self.out_channels, kernel_size=(1, 1), name="conv_shortcut")(res)
@@ -111,17 +111,18 @@ class Transformer2DModel(nn.Module):
     n_heads: int = 8
     d_head: int = 64
     context_dim: Optional[int] = 768
+    norm_num_groups: int = 32
 
     @nn.compact
     def __call__(self, x: jax.Array, context: Optional[jax.Array] = None) -> jax.Array:
         # x is [B, H, W, C]
         b, h, w, c = x.shape
         res = x
-        x_norm = nn.GroupNorm(num_groups=32, name="norm")(x)
+        x_norm = nn.GroupNorm(num_groups=self.norm_num_groups, epsilon=1e-6, name="norm")(x)
         x_flat = nn.Conv(c, kernel_size=(1, 1), name="proj_in")(x_norm).reshape((b, h * w, c))
 
         # 1. Self-Attention
-        attn1_in = nn.LayerNorm(name="norm1")(x_flat)
+        attn1_in = nn.LayerNorm(epsilon=1e-5, name="norm1")(x_flat)
         x_flat = x_flat + CrossAttention(
             query_dim=c,
             heads=self.n_heads,
@@ -131,7 +132,7 @@ class Transformer2DModel(nn.Module):
 
         # 2. Cross-Attention
         if context is not None:
-            attn2_in = nn.LayerNorm(name="norm2")(x_flat)
+            attn2_in = nn.LayerNorm(epsilon=1e-5, name="norm2")(x_flat)
             x_flat = x_flat + CrossAttention(
                 query_dim=c,
                 context_dim=self.context_dim,
@@ -141,16 +142,34 @@ class Transformer2DModel(nn.Module):
             )(attn2_in, context)
 
         # 3. FeedForward (GEGLU MLP)
-        ff_in = nn.LayerNorm(name="norm3")(x_flat)
+        ff_in = nn.LayerNorm(epsilon=1e-5, name="norm3")(x_flat)
         h_geglu = nn.Dense(c * 4 * 2, name="ff_net_0_proj")(ff_in)
         h1, h2 = jnp.split(h_geglu, 2, axis=-1)
-        h_act = h1 * jax.nn.gelu(h2)
+        h_act = h1 * jax.nn.gelu(h2, approximate=False)
         h_out = nn.Dense(c, name="ff_net_2")(h_act)
         x_flat = x_flat + h_out
 
         x_spatial = x_flat.reshape((b, h, w, c))
         out = nn.Conv(c, kernel_size=(1, 1), name="proj_out")(x_spatial)
         return res + out
+
+
+class UNetDownsample2D(nn.Module):
+    channels: int
+
+    @nn.compact
+    def __call__(self, x: jax.Array) -> jax.Array:
+        return nn.Conv(self.channels, kernel_size=(3, 3), strides=(2, 2), padding=[(1, 1), (1, 1)], name="conv")(x)
+
+
+class UNetUpsample2D(nn.Module):
+    channels: int
+
+    @nn.compact
+    def __call__(self, x: jax.Array) -> jax.Array:
+        b, h, w, c = x.shape
+        x_up = jax.image.resize(x, (b, h * 2, w * 2, c), method="nearest")
+        return nn.Conv(self.channels, kernel_size=(3, 3), padding=[(1, 1), (1, 1)], name="conv")(x_up)
 
 
 class UNet2DConditionModel(nn.Module):
@@ -175,7 +194,7 @@ class UNet2DConditionModel(nn.Module):
 
         # 2. Stem conv
         curr_ch = self.config.block_out_channels[0]
-        x = nn.Conv(curr_ch, kernel_size=(3, 3), padding="SAME", name="conv_in")(sample)
+        x = nn.Conv(curr_ch, kernel_size=(3, 3), padding=[(1, 1), (1, 1)], name="conv_in")(sample)
         down_block_res_samples = [x]
 
         # 3. Down Blocks
@@ -199,12 +218,13 @@ class UNet2DConditionModel(nn.Module):
                         n_heads=heads,
                         d_head=dim_head,
                         context_dim=self.config.cross_attention_dim,
+                        norm_num_groups=self.config.norm_num_groups,
                         name=f"down_blocks_{i}_attentions_{j}",
                     )(x, context=encoder_hidden_states)
                 down_block_res_samples.append(x)
 
             if i < len(self.config.block_out_channels) - 1:
-                x = nn.Conv(curr_ch, kernel_size=(3, 3), strides=(2, 2), padding="SAME", name=f"down_blocks_{i}_downsamplers_0_conv")(x)
+                x = UNetDownsample2D(channels=curr_ch, name=f"down_blocks_{i}_downsamplers_0")(x)
                 down_block_res_samples.append(x)
 
         # 4. Mid Block
@@ -220,6 +240,7 @@ class UNet2DConditionModel(nn.Module):
             n_heads=8,
             d_head=mid_ch // 8,
             context_dim=self.config.cross_attention_dim,
+            norm_num_groups=self.config.norm_num_groups,
             name="mid_block_attentions_0",
         )(x, context=encoder_hidden_states)
         x = UNetResnetBlock(
@@ -231,11 +252,11 @@ class UNet2DConditionModel(nn.Module):
 
         # 5. Up Blocks
         reversed_channels = list(reversed(self.config.block_out_channels))
-        reversed_types = list(reversed(self.config.up_block_types))
+        up_types = list(self.config.up_block_types)
 
         for i, out_ch in enumerate(reversed_channels):
-            type_idx = min(i, len(reversed_types) - 1)
-            is_cross = "CrossAttn" in reversed_types[type_idx]
+            type_idx = min(i, len(up_types) - 1)
+            is_cross = "CrossAttn" in up_types[type_idx]
             for j in range(self.config.layers_per_block + 1):
                 skip = down_block_res_samples.pop()
                 x = jnp.concatenate([x, skip], axis=-1)
@@ -256,18 +277,18 @@ class UNet2DConditionModel(nn.Module):
                         n_heads=heads,
                         d_head=dim_head,
                         context_dim=self.config.cross_attention_dim,
+                        norm_num_groups=self.config.norm_num_groups,
                         name=f"up_blocks_{i}_attentions_{j}",
                     )(x, context=encoder_hidden_states)
 
             if i < len(reversed_channels) - 1:
-                b_sz, h_sz, w_sz, c_sz = x.shape
-                x = jax.image.resize(x, (b_sz, h_sz * 2, w_sz * 2, c_sz), method="nearest")
-                x = nn.Conv(curr_ch, kernel_size=(3, 3), padding="SAME", name=f"up_blocks_{i}_upsamplers_0_conv")(x)
+                x = UNetUpsample2D(channels=curr_ch, name=f"up_blocks_{i}_upsamplers_0")(x)
 
         # 6. Final Conv
-        x = nn.GroupNorm(num_groups=self.config.norm_num_groups, name="conv_norm_out")(x)
+        x = nn.GroupNorm(num_groups=self.config.norm_num_groups, epsilon=1e-5, name="conv_norm_out")(x)
         x = jax.nn.silu(x)
-        out = nn.Conv(self.config.out_channels, kernel_size=(3, 3), padding="SAME", name="conv_out")(x)
+        out = nn.Conv(self.config.out_channels, kernel_size=(3, 3), padding=[(1, 1), (1, 1)], name="conv_out")(x)
+        return out
         return out
 
     @classmethod

@@ -86,9 +86,9 @@ class MaskedAutoencoder(nn.Module):
         pos_embed = self.param(
             "pos_embed",
             nn.initializers.normal(stddev=0.02),
-            (1, num_patches, self.config.embed_dim),
+            (1, num_patches + 1, self.config.embed_dim),
         )
-        patches = patches + pos_embed
+        patches = patches + pos_embed[:, 1:, :]
 
         # 3. Masking
         if ratio > 0.0:
@@ -106,7 +106,7 @@ class MaskedAutoencoder(nn.Module):
             nn.initializers.normal(stddev=0.02),
             (1, 1, self.config.embed_dim),
         )
-        cls_tokens = jnp.broadcast_to(cls_token, (b, 1, self.config.embed_dim))
+        cls_tokens = jnp.broadcast_to(cls_token + pos_embed[:, :1, :], (b, 1, self.config.embed_dim))
         latent = jnp.concatenate([cls_tokens, x_masked], axis=1)
 
         # 5. Encoder Transformer Blocks
@@ -185,16 +185,16 @@ class MaskedAutoencoder(nn.Module):
         pos_embed = self.param(
             "pos_embed",
             nn.initializers.normal(stddev=0.02),
-            (1, num_patches, self.config.embed_dim),
+            (1, num_patches + 1, self.config.embed_dim),
         )
-        patches = patches + pos_embed
+        patches = patches + pos_embed[:, 1:, :]
 
         cls_token = self.param(
             "cls_token",
             nn.initializers.normal(stddev=0.02),
             (1, 1, self.config.embed_dim),
         )
-        cls_tokens = jnp.broadcast_to(cls_token, (b, 1, self.config.embed_dim))
+        cls_tokens = jnp.broadcast_to(cls_token + pos_embed[:, :1, :], (b, 1, self.config.embed_dim))
         latent = jnp.concatenate([cls_tokens, patches], axis=1)
 
         for i in range(self.config.depth):

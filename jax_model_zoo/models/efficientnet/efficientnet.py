@@ -66,21 +66,21 @@ class MBConvBlock(nn.Module):
         # 1. Expansion phase (Pointwise Conv)
         if self.expand_ratio != 1:
             x = nn.Conv(mid_channels, kernel_size=(1, 1), use_bias=False, name="expand_conv")(x)
-            x = nn.BatchNorm(use_running_average=deterministic, name="expand_bn")(x)
+            x = nn.BatchNorm(use_running_average=deterministic, epsilon=1e-5, name="expand_bn")(x)
             x = jax.nn.silu(x)
 
-        # 2. Depthwise Conv
-        padding = "SAME"
+        # 2. Depthwise Conv with symmetric padding matching PyTorch
+        pad = self.kernel_size // 2
         x = nn.Conv(
             mid_channels,
             kernel_size=(self.kernel_size, self.kernel_size),
             strides=(self.stride, self.stride),
-            padding=padding,
+            padding=[(pad, pad), (pad, pad)],
             feature_group_count=mid_channels,
             use_bias=False,
             name="depthwise_conv",
         )(x)
-        x = nn.BatchNorm(use_running_average=deterministic, name="depthwise_bn")(x)
+        x = nn.BatchNorm(use_running_average=deterministic, epsilon=1e-5, name="depthwise_bn")(x)
         x = jax.nn.silu(x)
 
         # 3. Squeeze-and-Excitation
@@ -94,7 +94,7 @@ class MBConvBlock(nn.Module):
 
         # 4. Pointwise Linear Output Conv
         x = nn.Conv(self.out_channels, kernel_size=(1, 1), use_bias=False, name="project_conv")(x)
-        x = nn.BatchNorm(use_running_average=deterministic, name="project_bn")(x)
+        x = nn.BatchNorm(use_running_average=deterministic, epsilon=1e-5, name="project_bn")(x)
 
         # 5. Residual connection
         if self.stride == 1 and self.in_channels == self.out_channels:
@@ -134,17 +134,17 @@ class EfficientNet(nn.Module):
             (6, 320, 1, 1, 3),  # Stage 7
         ]
 
-        # 1. Stem Conv
+        # 1. Stem Conv with symmetric padding matching PyTorch
         out_stem = _round_channels(32, w_mult)
         x = nn.Conv(
             out_stem,
             kernel_size=(3, 3),
             strides=(2, 2),
-            padding="SAME",
+            padding=[(1, 1), (1, 1)],
             use_bias=False,
             name="conv_stem",
         )(x)
-        x = nn.BatchNorm(use_running_average=deterministic, name="bn1")(x)
+        x = nn.BatchNorm(use_running_average=deterministic, epsilon=1e-5, name="bn1")(x)
         x = jax.nn.silu(x)
 
         in_ch = out_stem
@@ -178,7 +178,7 @@ class EfficientNet(nn.Module):
         # 3. Head Conv
         out_head = _round_channels(1280, w_mult)
         x = nn.Conv(out_head, kernel_size=(1, 1), use_bias=False, name="conv_head")(x)
-        x = nn.BatchNorm(use_running_average=deterministic, name="bn2")(x)
+        x = nn.BatchNorm(use_running_average=deterministic, epsilon=1e-5, name="bn2")(x)
         x = jax.nn.silu(x)
 
         # 4. Global Average Pooling & Classifier

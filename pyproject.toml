@@ -43,6 +43,12 @@ checkpoint = [
 test = [
     "pytest>=7.0.0",
     "pytest-timeout>=2.1.0",
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "transformers>=4.30.0",
+    "diffusers>=0.20.0",
+    "timm>=0.9.0",
+    "scipy>=1.9.0",
 ]
 all = [
     "jax-model-zoo[torch,checkpoint,test]",

@@ -43,11 +43,11 @@ class ResnetBlock2D(nn.Module):
     def __call__(self, x: jax.Array) -> jax.Array:
         res = x
 
-        h = nn.GroupNorm(num_groups=self.groups, name="norm1")(x)
+        h = nn.GroupNorm(num_groups=self.groups, epsilon=1e-6, name="norm1")(x)
         h = jax.nn.silu(h)
         h = nn.Conv(self.out_channels, kernel_size=(3, 3), padding="SAME", name="conv1")(h)
 
-        h = nn.GroupNorm(num_groups=self.groups, name="norm2")(h)
+        h = nn.GroupNorm(num_groups=self.groups, epsilon=1e-6, name="norm2")(h)
         h = jax.nn.silu(h)
         h = nn.Conv(self.out_channels, kernel_size=(3, 3), padding="SAME", name="conv2")(h)
 
@@ -58,7 +58,7 @@ class ResnetBlock2D(nn.Module):
 
 
 class Downsample2D(nn.Module):
-    """Downsampling 2x via strided convolution."""
+    """Downsampling 2x via strided convolution with asymmetric padding matching diffusers."""
 
     channels: int
 
@@ -68,7 +68,7 @@ class Downsample2D(nn.Module):
             self.channels,
             kernel_size=(3, 3),
             strides=(2, 2),
-            padding="SAME",
+            padding=[(0, 1), (0, 1)],
             name="conv",
         )(x)
 
@@ -83,6 +83,33 @@ class Upsample2D(nn.Module):
         b, h, w, c = x.shape
         x_up = jax.image.resize(x, (b, h * 2, w * 2, c), method="nearest")
         return nn.Conv(self.channels, kernel_size=(3, 3), padding="SAME", name="conv")(x_up)
+
+
+class MidBlockAttention(nn.Module):
+    """Self-attention block in VAE mid block matching diffusers."""
+
+    channels: int
+    groups: int = 32
+
+    @nn.compact
+    def __call__(self, x: jax.Array) -> jax.Array:
+        b, h, w, c = x.shape
+        res = x
+        normed = nn.GroupNorm(num_groups=self.groups, epsilon=1e-6, name="group_norm")(x)
+        normed = normed.reshape((b, h * w, c))
+
+        q = nn.Dense(c, name="to_q")(normed)
+        k = nn.Dense(c, name="to_k")(normed)
+        v = nn.Dense(c, name="to_v")(normed)
+
+        scale = 1.0 / np.sqrt(c)
+        attn = jnp.matmul(q, jnp.swapaxes(k, -1, -2)) * scale
+        attn = jax.nn.softmax(attn, axis=-1)
+        out = jnp.matmul(attn, v)
+
+        out = nn.Dense(c, name="to_out_0")(out)
+        out = out.reshape((b, h, w, c))
+        return res + out
 
 
 class VAEEncoder(nn.Module):
@@ -120,6 +147,11 @@ class VAEEncoder(nn.Module):
             groups=self.config.norm_num_groups,
             name="mid_block_resnets_0",
         )(x)
+        x = MidBlockAttention(
+            channels=curr_ch,
+            groups=self.config.norm_num_groups,
+            name="mid_block_attentions_0",
+        )(x)
         x = ResnetBlock2D(
             in_channels=curr_ch,
             out_channels=curr_ch,
@@ -128,7 +160,7 @@ class VAEEncoder(nn.Module):
         )(x)
 
         # Output
-        x = nn.GroupNorm(num_groups=self.config.norm_num_groups, name="conv_norm_out")(x)
+        x = nn.GroupNorm(num_groups=self.config.norm_num_groups, epsilon=1e-6, name="conv_norm_out")(x)
         x = jax.nn.silu(x)
         # Latent parameters: 2 * latent_channels (mean + logvar)
         x = nn.Conv(2 * self.config.latent_channels, kernel_size=(3, 3), padding="SAME", name="conv_out")(x)
@@ -158,6 +190,11 @@ class VAEDecoder(nn.Module):
             groups=self.config.norm_num_groups,
             name="mid_block_resnets_0",
         )(x)
+        x = MidBlockAttention(
+            channels=curr_ch,
+            groups=self.config.norm_num_groups,
+            name="mid_block_attentions_0",
+        )(x)
         x = ResnetBlock2D(
             in_channels=curr_ch,
             out_channels=curr_ch,
@@ -183,7 +220,7 @@ class VAEDecoder(nn.Module):
                 stage_features.append(x)
 
         # Output projection
-        x = nn.GroupNorm(num_groups=self.config.norm_num_groups, name="conv_norm_out")(x)
+        x = nn.GroupNorm(num_groups=self.config.norm_num_groups, epsilon=1e-6, name="conv_norm_out")(x)
         x = jax.nn.silu(x)
         out = nn.Conv(self.config.out_channels, kernel_size=(3, 3), padding="SAME", name="conv_out")(x)
         stage_features.append(out)
