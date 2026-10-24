@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jax-model-zoo"
+version = "0.1.0"
+description = "High-performance JAX/Flax model zoo with topology-agnostic checkpoints, model surgery, FLOPs export, and PyTorch interop."
+readme = "README.md"
+authors = [
+    { name = "Jax Model Zoo Contributors" }
+]
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "jax>=0.4.30",
+    "flax>=0.8.0",
+    "numpy>=1.22.0",
+    "safetensors>=0.4.0",
+    "optax>=0.1.7",
+    "pyyaml>=5.4.1",
+]
+
+[project.optional-dependencies]
+torch = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "transformers>=4.30.0",
+    "diffusers>=0.20.0",
+    "timm>=0.9.0",
+]
+checkpoint = [
+    "orbax-checkpoint>=0.5.0",
+    "msgpack>=1.0.0",
+]
+test = [
+    "pytest>=7.0.0",
+    "pytest-timeout>=2.1.0",
+]
+all = [
+    "jax-model-zoo[torch,checkpoint,test]",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["jax_model_zoo*"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --timeout=120"
+testpaths = ["tests"]
