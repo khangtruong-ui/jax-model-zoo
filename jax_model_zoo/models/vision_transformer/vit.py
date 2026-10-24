@@ -73,7 +73,7 @@ class ViTMLP(nn.Module):
     @nn.compact
     def __call__(self, x: jax.Array, deterministic: bool = True) -> jax.Array:
         x = nn.Dense(self.mlp_dim, name="fc1")(x)
-        x = jax.nn.gelu(x)
+        x = jax.nn.gelu(x, approximate=False)
         if not deterministic and self.dropout > 0.0:
             x = nn.Dropout(rate=self.dropout)(x, deterministic=deterministic)
         x = nn.Dense(self.dim, name="fc2")(x)
@@ -91,11 +91,12 @@ class ViTBlock(nn.Module):
     qkv_bias: bool = True
     dropout: float = 0.0
     attention_dropout: float = 0.0
+    layer_norm_eps: float = 1e-6
 
     @nn.compact
     def __call__(self, x: jax.Array, deterministic: bool = True) -> jax.Array:
         # Pre-LN Self-Attention
-        norm1 = nn.LayerNorm(name="norm1")(x)
+        norm1 = nn.LayerNorm(epsilon=self.layer_norm_eps, name="norm1")(x)
         attn = ViTAttention(
             dim=self.dim,
             num_heads=self.num_heads,
@@ -106,7 +107,7 @@ class ViTBlock(nn.Module):
         x = x + attn
 
         # Pre-LN MLP
-        norm2 = nn.LayerNorm(name="norm2")(x)
+        norm2 = nn.LayerNorm(epsilon=self.layer_norm_eps, name="norm2")(x)
         mlp = ViTMLP(
             dim=self.dim,
             mlp_dim=int(self.dim * self.mlp_ratio),
@@ -171,12 +172,13 @@ class VisionTransformer(nn.Module):
                 qkv_bias=self.config.qkv_bias,
                 dropout=self.config.dropout_rate,
                 attention_dropout=self.config.attention_dropout_rate,
+                layer_norm_eps=self.config.layer_norm_eps,
                 name=f"block_{i}",
             )(x, deterministic=deterministic)
             intermediate_features.append(x)
 
         # 5. Final LayerNorm
-        x = nn.LayerNorm(name="norm")(x)
+        x = nn.LayerNorm(epsilon=self.config.layer_norm_eps, name="norm")(x)
 
         # 6. Classification Head
         if self.config.classifier == "token":
@@ -221,11 +223,14 @@ class VisionTransformer(nn.Module):
             mlp_ratio=getattr(hf_cfg, "intermediate_size", 3072) / getattr(hf_cfg, "hidden_size", 768),
             num_classes=getattr(hf_cfg, "num_labels", 1000),
             qkv_bias=getattr(hf_cfg, "qkv_bias", True),
+            layer_norm_eps=getattr(hf_cfg, "layer_norm_eps", 1e-12),
         )
 
 
-def vit_base_patch16_224(**kwargs) -> VisionTransformer:
+def vit_base_patch16_224(pretrained: bool = False, **kwargs) -> Union[VisionTransformer, Tuple[VisionTransformer, Dict[str, Any]]]:
     """ViT-Base/16 factory function."""
+    if pretrained:
+        return VisionTransformer.from_pretrained("google/vit-base-patch16-224")
     cfg = ViTConfig(
         img_size=224,
         patch_size=16,
@@ -238,8 +243,10 @@ def vit_base_patch16_224(**kwargs) -> VisionTransformer:
     return VisionTransformer(config=cfg)
 
 
-def vit_large_patch16_224(**kwargs) -> VisionTransformer:
+def vit_large_patch16_224(pretrained: bool = False, **kwargs) -> Union[VisionTransformer, Tuple[VisionTransformer, Dict[str, Any]]]:
     """ViT-Large/16 factory function."""
+    if pretrained:
+        return VisionTransformer.from_pretrained("google/vit-large-patch16-224")
     cfg = ViTConfig(
         img_size=224,
         patch_size=16,
@@ -252,7 +259,7 @@ def vit_large_patch16_224(**kwargs) -> VisionTransformer:
     return VisionTransformer(config=cfg)
 
 
-def vit_large_patch14_224(**kwargs) -> VisionTransformer:
+def vit_large_patch14_224(pretrained: bool = False, **kwargs) -> Union[VisionTransformer, Tuple[VisionTransformer, Dict[str, Any]]]:
     """ViT-Large/14 factory function."""
     cfg = ViTConfig(
         img_size=224,

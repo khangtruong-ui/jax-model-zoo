@@ -26,6 +26,13 @@ setup(
             "orbax-checkpoint>=0.5.0",
             "msgpack>=1.0.0",
         ],
+        "tpu": [
+            "jax[tpu]",
+            "libtpu",
+        ],
+        "cuda": [
+            "jax[cuda12]",
+        ],
         "all": [
             "pytest>=7.0.0",
             "pytest-timeout>=2.1.0",

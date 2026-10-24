@@ -44,6 +44,14 @@ from jax_model_zoo.core.flops import (
     count_parameters,
     export_flops,
 )
+from jax_model_zoo.core.registry import (
+    PRETRAINED_CATALOG,
+    canonicalize_model_name,
+    download_and_convert,
+    get_model_info,
+    list_models,
+    load_model_from_online,
+)
 from jax_model_zoo.core.surgery import (
     LoRAConv,
     LoRADense,
@@ -79,6 +87,12 @@ __all__ = [
     "FLOPsReport",
     "export_flops",
     "count_parameters",
+    "PRETRAINED_CATALOG",
+    "canonicalize_model_name",
+    "list_models",
+    "get_model_info",
+    "load_model_from_online",
+    "download_and_convert",
     "get_devices",
     "get_device_count",
     "replicate",

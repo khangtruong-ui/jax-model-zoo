@@ -214,8 +214,10 @@ class EfficientNet(nn.Module):
         return flax_model, jax_params
 
 
-def efficientnet_b2(**kwargs) -> EfficientNet:
+def efficientnet_b2(pretrained: bool = False, **kwargs) -> Union[EfficientNet, Tuple[EfficientNet, Dict[str, Any]]]:
     """EfficientNet-B2 factory function."""
+    if pretrained:
+        return EfficientNet.from_pretrained("efficientnet_b2")
     cfg = EfficientNetConfig(
         width_coefficient=1.1,
         depth_coefficient=1.2,

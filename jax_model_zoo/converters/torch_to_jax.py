@@ -26,21 +26,21 @@ def convert_torch_vit_to_jax(
         v_np = torch_to_numpy(v)
 
         # 1. Patch embeddings
-        if "embeddings.patch_embeddings.projection.weight" in k or "patch_embed.proj.weight" in k:
+        if "patch_embeddings.projection.weight" in k or "patch_embed.proj.weight" in k or "patch_embed.projection.weight" in k:
             jax_params["patch_embed/projection/kernel"] = conv2d_weight_torch_to_jax(v_np)
-        elif "embeddings.patch_embeddings.projection.bias" in k or "patch_embed.proj.bias" in k:
+        elif "patch_embeddings.projection.bias" in k or "patch_embed.proj.bias" in k or "patch_embed.projection.bias" in k:
             jax_params["patch_embed/projection/bias"] = v_np
 
         # 2. CLS and Positional embeddings
-        elif "embeddings.cls_token" in k or k == "cls_token":
+        elif k.endswith("cls_token") or "embeddings.cls_token" in k:
             jax_params["cls_token"] = v_np.reshape((1, 1, -1))
-        elif "embeddings.position_embeddings" in k or "pos_embed" in k:
+        elif k.endswith("position_embeddings") or k.endswith("pos_embed"):
             jax_params["pos_embed"] = v_np.reshape((1, -1, v_np.shape[-1]))
 
         # 3. Final LayerNorm
-        elif "layernorm.weight" in k or k == "norm.weight":
+        elif k in ("norm.weight", "vit.layernorm.weight") or (k.endswith("layernorm.weight") and "layers" not in k and "layer" not in k):
             jax_params["norm/scale"] = v_np
-        elif "layernorm.bias" in k or k == "norm.bias":
+        elif k in ("norm.bias", "vit.layernorm.bias") or (k.endswith("layernorm.bias") and "layers" not in k and "layer" not in k):
             jax_params["norm/bias"] = v_np
 
         # 4. Classifier Head
@@ -49,56 +49,67 @@ def convert_torch_vit_to_jax(
         elif "classifier.bias" in k or "head.bias" in k:
             jax_params["head/bias"] = v_np
 
-        # 5. Transformer Blocks
-        elif "layer." in k or "blocks." in k:
-            # Extract block index
-            parts = k.split(".")
-            block_idx = None
-            for idx, p in enumerate(parts):
-                if p in ("layer", "blocks") and idx + 1 < len(parts):
-                    try:
-                        block_idx = int(parts[idx + 1])
-                        break
-                    except ValueError:
-                        pass
-
-            if block_idx is None:
-                continue
-
-            prefix = f"block_{block_idx}"
-
-            if "layernorm_before.weight" in k or "norm1.weight" in k:
-                jax_params[f"{prefix}/norm1/scale"] = v_np
-            elif "layernorm_before.bias" in k or "norm1.bias" in k:
-                jax_params[f"{prefix}/norm1/bias"] = v_np
-
-            elif "attention.output.dense.weight" in k or "attn.proj.weight" in k:
-                jax_params[f"{prefix}/attn/out_proj/kernel"] = dense_weight_torch_to_jax(v_np)
-            elif "attention.output.dense.bias" in k or "attn.proj.bias" in k:
-                jax_params[f"{prefix}/attn/out_proj/bias"] = v_np
-
-            elif "layernorm_after.weight" in k or "norm2.weight" in k:
-                jax_params[f"{prefix}/norm2/scale"] = v_np
-            elif "layernorm_after.bias" in k or "norm2.bias" in k:
-                jax_params[f"{prefix}/norm2/bias"] = v_np
-
-            elif "intermediate.dense.weight" in k or "mlp.fc1.weight" in k:
-                jax_params[f"{prefix}/mlp/fc1/kernel"] = dense_weight_torch_to_jax(v_np)
-            elif "intermediate.dense.bias" in k or "mlp.fc1.bias" in k:
-                jax_params[f"{prefix}/mlp/fc1/bias"] = v_np
-
-            elif "output.dense.weight" in k or "mlp.fc2.weight" in k:
-                jax_params[f"{prefix}/mlp/fc2/kernel"] = dense_weight_torch_to_jax(v_np)
-            elif "output.dense.bias" in k or "mlp.fc2.bias" in k:
-                jax_params[f"{prefix}/mlp/fc2/bias"] = v_np
-
-    # Collect q, k, v for attention if separate in torch
-    num_blocks = (config.depth if config else 24)
-    for b_idx in range(num_blocks):
+    # 5. Transformer Blocks
+    depth = (config.depth if config else 24)
+    for b_idx in range(depth):
         prefix = f"block_{b_idx}"
-        q_k = [k for k in torch_state if f"layer.{b_idx}.attention.attention.query.weight" in k]
-        k_k = [k for k in torch_state if f"layer.{b_idx}.attention.attention.key.weight" in k]
-        v_k = [k for k in torch_state if f"layer.{b_idx}.attention.attention.value.weight" in k]
+
+        # LayerNorm 1
+        for k in [
+            f"vit.layers.{b_idx}.layernorm_before.weight",
+            f"vit.encoder.layer.{b_idx}.layernorm_before.weight",
+            f"layer.{b_idx}.layernorm_before.weight",
+            f"blocks.{b_idx}.norm1.weight",
+        ]:
+            if k in torch_state:
+                jax_params[f"{prefix}/norm1/scale"] = torch_to_numpy(torch_state[k])
+                break
+        for k in [
+            f"vit.layers.{b_idx}.layernorm_before.bias",
+            f"vit.encoder.layer.{b_idx}.layernorm_before.bias",
+            f"layer.{b_idx}.layernorm_before.bias",
+            f"blocks.{b_idx}.norm1.bias",
+        ]:
+            if k in torch_state:
+                jax_params[f"{prefix}/norm1/bias"] = torch_to_numpy(torch_state[k])
+                break
+
+        # LayerNorm 2
+        for k in [
+            f"vit.layers.{b_idx}.layernorm_after.weight",
+            f"vit.encoder.layer.{b_idx}.layernorm_after.weight",
+            f"layer.{b_idx}.layernorm_after.weight",
+            f"blocks.{b_idx}.norm2.weight",
+        ]:
+            if k in torch_state:
+                jax_params[f"{prefix}/norm2/scale"] = torch_to_numpy(torch_state[k])
+                break
+        for k in [
+            f"vit.layers.{b_idx}.layernorm_after.bias",
+            f"vit.encoder.layer.{b_idx}.layernorm_after.bias",
+            f"layer.{b_idx}.layernorm_after.bias",
+            f"blocks.{b_idx}.norm2.bias",
+        ]:
+            if k in torch_state:
+                jax_params[f"{prefix}/norm2/bias"] = torch_to_numpy(torch_state[k])
+                break
+
+        # Attention QKV
+        q_k = [k for k in torch_state if (
+            f"layers.{b_idx}.attention.q_proj.weight" in k or
+            f"layer.{b_idx}.attention.attention.query.weight" in k or
+            f"layer.{b_idx}.attention.q_proj.weight" in k
+        )]
+        k_k = [k for k in torch_state if (
+            f"layers.{b_idx}.attention.k_proj.weight" in k or
+            f"layer.{b_idx}.attention.attention.key.weight" in k or
+            f"layer.{b_idx}.attention.k_proj.weight" in k
+        )]
+        v_k = [k for k in torch_state if (
+            f"layers.{b_idx}.attention.v_proj.weight" in k or
+            f"layer.{b_idx}.attention.attention.value.weight" in k or
+            f"layer.{b_idx}.attention.v_proj.weight" in k
+        )]
 
         if q_k and k_k and v_k:
             q_w = torch_to_numpy(torch_state[q_k[0]])
@@ -107,9 +118,21 @@ def convert_torch_vit_to_jax(
             qkv_w = np.concatenate([q_w, k_w, v_w], axis=0)
             jax_params[f"{prefix}/attn/qkv/kernel"] = dense_weight_torch_to_jax(qkv_w)
 
-            q_b = [k for k in torch_state if f"layer.{b_idx}.attention.attention.query.bias" in k]
-            k_b = [k for k in torch_state if f"layer.{b_idx}.attention.attention.key.bias" in k]
-            v_b = [k for k in torch_state if f"layer.{b_idx}.attention.attention.value.bias" in k]
+            q_b = [k for k in torch_state if (
+                f"layers.{b_idx}.attention.q_proj.bias" in k or
+                f"layer.{b_idx}.attention.attention.query.bias" in k or
+                f"layer.{b_idx}.attention.q_proj.bias" in k
+            )]
+            k_b = [k for k in torch_state if (
+                f"layers.{b_idx}.attention.k_proj.bias" in k or
+                f"layer.{b_idx}.attention.attention.key.bias" in k or
+                f"layer.{b_idx}.attention.k_proj.bias" in k
+            )]
+            v_b = [k for k in torch_state if (
+                f"layers.{b_idx}.attention.v_proj.bias" in k or
+                f"layer.{b_idx}.attention.attention.value.bias" in k or
+                f"layer.{b_idx}.attention.v_proj.bias" in k
+            )]
             if q_b and k_b and v_b:
                 qkv_b = np.concatenate([
                     torch_to_numpy(torch_state[q_b[0]]),
@@ -118,12 +141,64 @@ def convert_torch_vit_to_jax(
                 ], axis=0)
                 jax_params[f"{prefix}/attn/qkv/bias"] = qkv_b
         elif any(f"blocks.{b_idx}.attn.qkv.weight" in k for k in torch_state):
-            # timm format where qkv is already concatenated
             w = torch_to_numpy([torch_state[k] for k in torch_state if f"blocks.{b_idx}.attn.qkv.weight" in k][0])
             jax_params[f"{prefix}/attn/qkv/kernel"] = dense_weight_torch_to_jax(w)
             b_list = [torch_state[k] for k in torch_state if f"blocks.{b_idx}.attn.qkv.bias" in k]
             if b_list:
                 jax_params[f"{prefix}/attn/qkv/bias"] = torch_to_numpy(b_list[0])
+
+        # Attention Out Proj
+        out_k = [k for k in torch_state if (
+            f"layers.{b_idx}.attention.o_proj.weight" in k or
+            f"layer.{b_idx}.attention.output.dense.weight" in k or
+            f"layer.{b_idx}.attention.o_proj.weight" in k or
+            f"blocks.{b_idx}.attn.proj.weight" in k
+        )]
+        if out_k:
+            jax_params[f"{prefix}/attn/out_proj/kernel"] = dense_weight_torch_to_jax(torch_to_numpy(torch_state[out_k[0]]))
+        out_b = [k for k in torch_state if (
+            f"layers.{b_idx}.attention.o_proj.bias" in k or
+            f"layer.{b_idx}.attention.output.dense.bias" in k or
+            f"layer.{b_idx}.attention.o_proj.bias" in k or
+            f"blocks.{b_idx}.attn.proj.bias" in k
+        )]
+        if out_b:
+            jax_params[f"{prefix}/attn/out_proj/bias"] = torch_to_numpy(torch_state[out_b[0]])
+
+        # MLP
+        fc1_w = [k for k in torch_state if (
+            f"layers.{b_idx}.mlp.fc1.weight" in k or
+            f"layer.{b_idx}.intermediate.dense.weight" in k or
+            f"layer.{b_idx}.mlp.fc1.weight" in k or
+            f"blocks.{b_idx}.mlp.fc1.weight" in k
+        )]
+        if fc1_w:
+            jax_params[f"{prefix}/mlp/fc1/kernel"] = dense_weight_torch_to_jax(torch_to_numpy(torch_state[fc1_w[0]]))
+        fc1_b = [k for k in torch_state if (
+            f"layers.{b_idx}.mlp.fc1.bias" in k or
+            f"layer.{b_idx}.intermediate.dense.bias" in k or
+            f"layer.{b_idx}.mlp.fc1.bias" in k or
+            f"blocks.{b_idx}.mlp.fc1.bias" in k
+        )]
+        if fc1_b:
+            jax_params[f"{prefix}/mlp/fc1/bias"] = torch_to_numpy(torch_state[fc1_b[0]])
+
+        fc2_w = [k for k in torch_state if (
+            f"layers.{b_idx}.mlp.fc2.weight" in k or
+            f"layer.{b_idx}.output.dense.weight" in k or
+            f"layer.{b_idx}.mlp.fc2.weight" in k or
+            f"blocks.{b_idx}.mlp.fc2.weight" in k
+        )]
+        if fc2_w:
+            jax_params[f"{prefix}/mlp/fc2/kernel"] = dense_weight_torch_to_jax(torch_to_numpy(torch_state[fc2_w[0]]))
+        fc2_b = [k for k in torch_state if (
+            f"layers.{b_idx}.mlp.fc2.bias" in k or
+            f"layer.{b_idx}.output.dense.bias" in k or
+            f"layer.{b_idx}.mlp.fc2.bias" in k or
+            f"blocks.{b_idx}.mlp.fc2.bias" in k
+        )]
+        if fc2_b:
+            jax_params[f"{prefix}/mlp/fc2/bias"] = torch_to_numpy(torch_state[fc2_b[0]])
 
     nested = unflatten_nested_dict(jax_params, sep="/")
     return {"params": nested}
@@ -139,18 +214,18 @@ def convert_torch_mae_to_jax(
     for k, v in torch_state.items():
         v_np = torch_to_numpy(v)
 
-        if "patch_embed.proj.weight" in k or "patch_embed.projection.weight" in k:
+        if "patch_embeddings.projection.weight" in k or "patch_embed.proj.weight" in k or "patch_embed.projection.weight" in k:
             jax_params["patch_embed/projection/kernel"] = conv2d_weight_torch_to_jax(v_np)
-        elif "patch_embed.proj.bias" in k or "patch_embed.projection.bias" in k:
+        elif "patch_embeddings.projection.bias" in k or "patch_embed.proj.bias" in k or "patch_embed.projection.bias" in k:
             jax_params["patch_embed/projection/bias"] = v_np
-        elif k.endswith("cls_token"):
+        elif k.endswith("cls_token") or "embeddings.cls_token" in k:
             jax_params["cls_token"] = v_np.reshape((1, 1, -1))
-        elif k.endswith("pos_embed") and "decoder" not in k:
-            jax_params["pos_embed"] = v_np
+        elif k.endswith("position_embeddings") or (k.endswith("pos_embed") and "decoder" not in k):
+            jax_params["pos_embed"] = v_np.reshape((1, -1, v_np.shape[-1]))
         elif k.endswith("mask_token"):
             jax_params["mask_token"] = v_np.reshape((1, 1, -1))
         elif "decoder_pos_embed" in k:
-            jax_params["decoder_pos_embed"] = v_np
+            jax_params["decoder_pos_embed"] = v_np.reshape((1, -1, v_np.shape[-1]))
         elif "decoder_embed.weight" in k:
             jax_params["decoder_embed/kernel"] = dense_weight_torch_to_jax(v_np)
         elif "decoder_embed.bias" in k:
@@ -159,76 +234,139 @@ def convert_torch_mae_to_jax(
             jax_params["decoder_pred/kernel"] = dense_weight_torch_to_jax(v_np)
         elif "decoder_pred.bias" in k:
             jax_params["decoder_pred/bias"] = v_np
-        elif "norm.weight" in k and "decoder" not in k and "blocks" not in k:
+        elif (k in ("vit.layernorm.weight", "norm.weight")) or ("layernorm.weight" in k and "decoder" not in k and "layer" not in k):
             jax_params["encoder_norm/scale"] = v_np
-        elif "norm.bias" in k and "decoder" not in k and "blocks" not in k:
+        elif (k in ("vit.layernorm.bias", "norm.bias")) or ("layernorm.bias" in k and "decoder" not in k and "layer" not in k):
             jax_params["encoder_norm/bias"] = v_np
         elif "decoder_norm.weight" in k:
             jax_params["decoder_norm/scale"] = v_np
         elif "decoder_norm.bias" in k:
             jax_params["decoder_norm/bias"] = v_np
 
-        # Encoder transformer blocks
-        elif "blocks." in k and "decoder" not in k:
-            parts = k.split(".")
-            b_idx = parts[1]
-            prefix = f"encoder_block_{b_idx}"
-            if "norm1.weight" in k:
-                jax_params[f"{prefix}/norm1/scale"] = v_np
-            elif "norm1.bias" in k:
-                jax_params[f"{prefix}/norm1/bias"] = v_np
-            elif "attn.qkv.weight" in k:
-                jax_params[f"{prefix}/attn/qkv/kernel"] = dense_weight_torch_to_jax(v_np)
-            elif "attn.qkv.bias" in k:
-                jax_params[f"{prefix}/attn/qkv/bias"] = v_np
-            elif "attn.proj.weight" in k:
-                jax_params[f"{prefix}/attn/out_proj/kernel"] = dense_weight_torch_to_jax(v_np)
-            elif "attn.proj.bias" in k:
-                jax_params[f"{prefix}/attn/out_proj/bias"] = v_np
-            elif "norm2.weight" in k:
-                jax_params[f"{prefix}/norm2/scale"] = v_np
-            elif "norm2.bias" in k:
-                jax_params[f"{prefix}/norm2/bias"] = v_np
-            elif "mlp.fc1.weight" in k:
-                jax_params[f"{prefix}/mlp/fc1/kernel"] = dense_weight_torch_to_jax(v_np)
-            elif "mlp.fc1.bias" in k:
-                jax_params[f"{prefix}/mlp/fc1/bias"] = v_np
-            elif "mlp.fc2.weight" in k:
-                jax_params[f"{prefix}/mlp/fc2/kernel"] = dense_weight_torch_to_jax(v_np)
-            elif "mlp.fc2.bias" in k:
-                jax_params[f"{prefix}/mlp/fc2/bias"] = v_np
+    # Encoder transformer blocks
+    enc_depth = (config.depth if config else 12)
+    for b_idx in range(enc_depth):
+        prefix = f"encoder_block_{b_idx}"
+        for k in [f"vit.layers.{b_idx}.layernorm_before.weight", f"blocks.{b_idx}.norm1.weight", f"layer.{b_idx}.layernorm_before.weight"]:
+            if k in torch_state:
+                jax_params[f"{prefix}/norm1/scale"] = torch_to_numpy(torch_state[k])
+                break
+        for k in [f"vit.layers.{b_idx}.layernorm_before.bias", f"blocks.{b_idx}.norm1.bias", f"layer.{b_idx}.layernorm_before.bias"]:
+            if k in torch_state:
+                jax_params[f"{prefix}/norm1/bias"] = torch_to_numpy(torch_state[k])
+                break
+        for k in [f"vit.layers.{b_idx}.layernorm_after.weight", f"blocks.{b_idx}.norm2.weight", f"layer.{b_idx}.layernorm_after.weight"]:
+            if k in torch_state:
+                jax_params[f"{prefix}/norm2/scale"] = torch_to_numpy(torch_state[k])
+                break
+        for k in [f"vit.layers.{b_idx}.layernorm_after.bias", f"blocks.{b_idx}.norm2.bias", f"layer.{b_idx}.layernorm_after.bias"]:
+            if k in torch_state:
+                jax_params[f"{prefix}/norm2/bias"] = torch_to_numpy(torch_state[k])
+                break
 
-        # Decoder transformer blocks
-        elif "decoder_blocks." in k:
-            parts = k.split(".")
-            b_idx = parts[1]
-            prefix = f"decoder_block_{b_idx}"
-            if "norm1.weight" in k:
-                jax_params[f"{prefix}/norm1/scale"] = v_np
-            elif "norm1.bias" in k:
-                jax_params[f"{prefix}/norm1/bias"] = v_np
-            elif "attn.qkv.weight" in k:
-                jax_params[f"{prefix}/attn/qkv/kernel"] = dense_weight_torch_to_jax(v_np)
-            elif "attn.qkv.bias" in k:
-                jax_params[f"{prefix}/attn/qkv/bias"] = v_np
-            elif "attn.proj.weight" in k:
-                jax_params[f"{prefix}/attn/out_proj/kernel"] = dense_weight_torch_to_jax(v_np)
-            elif "attn.proj.bias" in k:
-                jax_params[f"{prefix}/attn/out_proj/bias"] = v_np
-            elif "norm2.weight" in k:
-                jax_params[f"{prefix}/norm2/scale"] = v_np
-            elif "norm2.bias" in k:
-                jax_params[f"{prefix}/norm2/bias"] = v_np
-            elif "mlp.fc1.weight" in k:
-                jax_params[f"{prefix}/mlp/fc1/kernel"] = dense_weight_torch_to_jax(v_np)
-            elif "mlp.fc1.bias" in k:
-                jax_params[f"{prefix}/mlp/fc1/bias"] = v_np
-            elif "mlp.fc2.weight" in k:
-                jax_params[f"{prefix}/mlp/fc2/kernel"] = dense_weight_torch_to_jax(v_np)
-            elif "mlp.fc2.bias" in k:
-                jax_params[f"{prefix}/mlp/fc2/bias"] = v_np
+        q_k = [k for k in torch_state if (f"vit.layers.{b_idx}.attention.q_proj.weight" in k or f"layers.{b_idx}.attention.q_proj.weight" in k or f"layer.{b_idx}.attention.attention.query.weight" in k)]
+        k_k = [k for k in torch_state if (f"vit.layers.{b_idx}.attention.k_proj.weight" in k or f"layers.{b_idx}.attention.k_proj.weight" in k or f"layer.{b_idx}.attention.attention.key.weight" in k)]
+        v_k = [k for k in torch_state if (f"vit.layers.{b_idx}.attention.v_proj.weight" in k or f"layers.{b_idx}.attention.v_proj.weight" in k or f"layer.{b_idx}.attention.attention.value.weight" in k)]
+        if q_k and k_k and v_k:
+            q_w = torch_to_numpy(torch_state[q_k[0]])
+            k_w = torch_to_numpy(torch_state[k_k[0]])
+            v_w = torch_to_numpy(torch_state[v_k[0]])
+            jax_params[f"{prefix}/attn/qkv/kernel"] = dense_weight_torch_to_jax(np.concatenate([q_w, k_w, v_w], axis=0))
+            q_b = [k for k in torch_state if (f"vit.layers.{b_idx}.attention.q_proj.bias" in k or f"layers.{b_idx}.attention.q_proj.bias" in k or f"layer.{b_idx}.attention.attention.query.bias" in k)]
+            k_b = [k for k in torch_state if (f"vit.layers.{b_idx}.attention.k_proj.bias" in k or f"layers.{b_idx}.attention.k_proj.bias" in k or f"layer.{b_idx}.attention.attention.key.bias" in k)]
+            v_b = [k for k in torch_state if (f"vit.layers.{b_idx}.attention.v_proj.bias" in k or f"layers.{b_idx}.attention.v_proj.bias" in k or f"layer.{b_idx}.attention.attention.value.bias" in k)]
+            if q_b and k_b and v_b:
+                jax_params[f"{prefix}/attn/qkv/bias"] = np.concatenate([torch_to_numpy(torch_state[q_b[0]]), torch_to_numpy(torch_state[k_b[0]]), torch_to_numpy(torch_state[v_b[0]])], axis=0)
+        elif any(f"blocks.{b_idx}.attn.qkv.weight" in k for k in torch_state):
+            w = torch_to_numpy([torch_state[k] for k in torch_state if f"blocks.{b_idx}.attn.qkv.weight" in k][0])
+            jax_params[f"{prefix}/attn/qkv/kernel"] = dense_weight_torch_to_jax(w)
+            b_list = [torch_state[k] for k in torch_state if f"blocks.{b_idx}.attn.qkv.bias" in k]
+            if b_list:
+                jax_params[f"{prefix}/attn/qkv/bias"] = torch_to_numpy(b_list[0])
 
-    # Encoder and decoder blocks
+        out_k = [k for k in torch_state if (f"vit.layers.{b_idx}.attention.o_proj.weight" in k or f"layers.{b_idx}.attention.o_proj.weight" in k or f"layer.{b_idx}.attention.output.dense.weight" in k or f"blocks.{b_idx}.attn.proj.weight" in k)]
+        if out_k:
+            jax_params[f"{prefix}/attn/out_proj/kernel"] = dense_weight_torch_to_jax(torch_to_numpy(torch_state[out_k[0]]))
+        out_b = [k for k in torch_state if (f"vit.layers.{b_idx}.attention.o_proj.bias" in k or f"layers.{b_idx}.attention.o_proj.bias" in k or f"layer.{b_idx}.attention.output.dense.bias" in k or f"blocks.{b_idx}.attn.proj.bias" in k)]
+        if out_b:
+            jax_params[f"{prefix}/attn/out_proj/bias"] = torch_to_numpy(torch_state[out_b[0]])
+
+        fc1_k = [k for k in torch_state if (f"vit.layers.{b_idx}.mlp.fc1.weight" in k or f"layers.{b_idx}.mlp.fc1.weight" in k or f"layer.{b_idx}.intermediate.dense.weight" in k or f"blocks.{b_idx}.mlp.fc1.weight" in k)]
+        if fc1_k:
+            jax_params[f"{prefix}/mlp/fc1/kernel"] = dense_weight_torch_to_jax(torch_to_numpy(torch_state[fc1_k[0]]))
+        fc1_b = [k for k in torch_state if (f"vit.layers.{b_idx}.mlp.fc1.bias" in k or f"layers.{b_idx}.mlp.fc1.bias" in k or f"layer.{b_idx}.intermediate.dense.bias" in k or f"blocks.{b_idx}.mlp.fc1.bias" in k)]
+        if fc1_b:
+            jax_params[f"{prefix}/mlp/fc1/bias"] = torch_to_numpy(torch_state[fc1_b[0]])
+
+        fc2_k = [k for k in torch_state if (f"vit.layers.{b_idx}.mlp.fc2.weight" in k or f"layers.{b_idx}.mlp.fc2.weight" in k or f"layer.{b_idx}.output.dense.weight" in k or f"blocks.{b_idx}.mlp.fc2.weight" in k)]
+        if fc2_k:
+            jax_params[f"{prefix}/mlp/fc2/kernel"] = dense_weight_torch_to_jax(torch_to_numpy(torch_state[fc2_k[0]]))
+        fc2_b = [k for k in torch_state if (f"vit.layers.{b_idx}.mlp.fc2.bias" in k or f"layers.{b_idx}.mlp.fc2.bias" in k or f"layer.{b_idx}.output.dense.bias" in k or f"blocks.{b_idx}.mlp.fc2.bias" in k)]
+        if fc2_b:
+            jax_params[f"{prefix}/mlp/fc2/bias"] = torch_to_numpy(torch_state[fc2_b[0]])
+
+    # Decoder transformer blocks
+    dec_depth = (config.decoder_depth if config else 8)
+    for b_idx in range(dec_depth):
+        prefix = f"decoder_block_{b_idx}"
+        for k in [f"decoder.decoder_layers.{b_idx}.layernorm_before.weight", f"decoder_blocks.{b_idx}.norm1.weight"]:
+            if k in torch_state:
+                jax_params[f"{prefix}/norm1/scale"] = torch_to_numpy(torch_state[k])
+                break
+        for k in [f"decoder.decoder_layers.{b_idx}.layernorm_before.bias", f"decoder_blocks.{b_idx}.norm1.bias"]:
+            if k in torch_state:
+                jax_params[f"{prefix}/norm1/bias"] = torch_to_numpy(torch_state[k])
+                break
+        for k in [f"decoder.decoder_layers.{b_idx}.layernorm_after.weight", f"decoder_blocks.{b_idx}.norm2.weight"]:
+            if k in torch_state:
+                jax_params[f"{prefix}/norm2/scale"] = torch_to_numpy(torch_state[k])
+                break
+        for k in [f"decoder.decoder_layers.{b_idx}.layernorm_after.bias", f"decoder_blocks.{b_idx}.norm2.bias"]:
+            if k in torch_state:
+                jax_params[f"{prefix}/norm2/bias"] = torch_to_numpy(torch_state[k])
+                break
+
+        q_k = [k for k in torch_state if (f"decoder.decoder_layers.{b_idx}.attention.q_proj.weight" in k or f"decoder_layers.{b_idx}.attention.q_proj.weight" in k)]
+        k_k = [k for k in torch_state if (f"decoder.decoder_layers.{b_idx}.attention.k_proj.weight" in k or f"decoder_layers.{b_idx}.attention.k_proj.weight" in k)]
+        v_k = [k for k in torch_state if (f"decoder.decoder_layers.{b_idx}.attention.v_proj.weight" in k or f"decoder_layers.{b_idx}.attention.v_proj.weight" in k)]
+        if q_k and k_k and v_k:
+            q_w = torch_to_numpy(torch_state[q_k[0]])
+            k_w = torch_to_numpy(torch_state[k_k[0]])
+            v_w = torch_to_numpy(torch_state[v_k[0]])
+            jax_params[f"{prefix}/attn/qkv/kernel"] = dense_weight_torch_to_jax(np.concatenate([q_w, k_w, v_w], axis=0))
+            q_b = [k for k in torch_state if (f"decoder.decoder_layers.{b_idx}.attention.q_proj.bias" in k or f"decoder_layers.{b_idx}.attention.q_proj.bias" in k)]
+            k_b = [k for k in torch_state if (f"decoder.decoder_layers.{b_idx}.attention.k_proj.bias" in k or f"decoder_layers.{b_idx}.attention.k_proj.bias" in k)]
+            v_b = [k for k in torch_state if (f"decoder.decoder_layers.{b_idx}.attention.v_proj.bias" in k or f"decoder_layers.{b_idx}.attention.v_proj.bias" in k)]
+            if q_b and k_b and v_b:
+                jax_params[f"{prefix}/attn/qkv/bias"] = np.concatenate([torch_to_numpy(torch_state[q_b[0]]), torch_to_numpy(torch_state[k_b[0]]), torch_to_numpy(torch_state[v_b[0]])], axis=0)
+        elif any(f"decoder_blocks.{b_idx}.attn.qkv.weight" in k for k in torch_state):
+            w = torch_to_numpy([torch_state[k] for k in torch_state if f"decoder_blocks.{b_idx}.attn.qkv.weight" in k][0])
+            jax_params[f"{prefix}/attn/qkv/kernel"] = dense_weight_torch_to_jax(w)
+            b_list = [torch_state[k] for k in torch_state if f"decoder_blocks.{b_idx}.attn.qkv.bias" in k]
+            if b_list:
+                jax_params[f"{prefix}/attn/qkv/bias"] = torch_to_numpy(b_list[0])
+
+        out_k = [k for k in torch_state if (f"decoder.decoder_layers.{b_idx}.attention.o_proj.weight" in k or f"decoder_layers.{b_idx}.attention.o_proj.weight" in k or f"decoder_blocks.{b_idx}.attn.proj.weight" in k)]
+        if out_k:
+            jax_params[f"{prefix}/attn/out_proj/kernel"] = dense_weight_torch_to_jax(torch_to_numpy(torch_state[out_k[0]]))
+        out_b = [k for k in torch_state if (f"decoder.decoder_layers.{b_idx}.attention.o_proj.bias" in k or f"decoder_layers.{b_idx}.attention.o_proj.bias" in k or f"decoder_blocks.{b_idx}.attn.proj.bias" in k)]
+        if out_b:
+            jax_params[f"{prefix}/attn/out_proj/bias"] = torch_to_numpy(torch_state[out_b[0]])
+
+        fc1_k = [k for k in torch_state if (f"decoder.decoder_layers.{b_idx}.mlp.fc1.weight" in k or f"decoder_layers.{b_idx}.mlp.fc1.weight" in k or f"decoder_blocks.{b_idx}.mlp.fc1.weight" in k)]
+        if fc1_k:
+            jax_params[f"{prefix}/mlp/fc1/kernel"] = dense_weight_torch_to_jax(torch_to_numpy(torch_state[fc1_k[0]]))
+        fc1_b = [k for k in torch_state if (f"decoder.decoder_layers.{b_idx}.mlp.fc1.bias" in k or f"decoder_layers.{b_idx}.mlp.fc1.bias" in k or f"decoder_blocks.{b_idx}.mlp.fc1.bias" in k)]
+        if fc1_b:
+            jax_params[f"{prefix}/mlp/fc1/bias"] = torch_to_numpy(torch_state[fc1_b[0]])
+
+        fc2_k = [k for k in torch_state if (f"decoder.decoder_layers.{b_idx}.mlp.fc2.weight" in k or f"decoder_layers.{b_idx}.mlp.fc2.weight" in k or f"decoder_blocks.{b_idx}.mlp.fc2.weight" in k)]
+        if fc2_k:
+            jax_params[f"{prefix}/mlp/fc2/kernel"] = dense_weight_torch_to_jax(torch_to_numpy(torch_state[fc2_k[0]]))
+        fc2_b = [k for k in torch_state if (f"decoder.decoder_layers.{b_idx}.mlp.fc2.bias" in k or f"decoder_layers.{b_idx}.mlp.fc2.bias" in k or f"decoder_blocks.{b_idx}.mlp.fc2.bias" in k)]
+        if fc2_b:
+            jax_params[f"{prefix}/mlp/fc2/bias"] = torch_to_numpy(torch_state[fc2_b[0]])
+
     nested = unflatten_nested_dict(jax_params, sep="/")
     return {"params": nested}
 

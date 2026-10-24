@@ -85,8 +85,10 @@ class StableDiffusionPipeline(nn.Module):
         return pipeline, params
 
 
-def stable_diffusion_v1_5(**kwargs) -> StableDiffusionPipeline:
+def stable_diffusion_v1_5(pretrained: bool = False, **kwargs) -> Union[StableDiffusionPipeline, Tuple[StableDiffusionPipeline, Dict[str, Any]]]:
     """Standard Stable Diffusion v1.5 factory function."""
+    if pretrained:
+        return StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5", is_efficient=False)
     cfg = StableDiffusionConfig(
         vae=AutoencoderKLConfig(block_out_channels=(128, 256, 512, 512), latent_channels=4),
         unet=UNet2DConditionConfig(block_out_channels=(320, 640, 1280, 1280), cross_attention_dim=768),
@@ -96,8 +98,10 @@ def stable_diffusion_v1_5(**kwargs) -> StableDiffusionPipeline:
     return StableDiffusionPipeline(config=cfg)
 
 
-def stable_diffusion_efficient(**kwargs) -> StableDiffusionPipeline:
-    """Efficient Stable Diffusion (Tiny-SD architecture: 3 stages 320/640/1280) factory function."""
+def stable_diffusion_efficient(pretrained: bool = False, **kwargs) -> Union[StableDiffusionPipeline, Tuple[StableDiffusionPipeline, Dict[str, Any]]]:
+    """Efficient Stable Diffusion (BK-SDM-small / Tiny-SD architecture) factory function."""
+    if pretrained:
+        return StableDiffusionPipeline.from_pretrained("nota-ai/bk-sdm-small", is_efficient=True)
     cfg = StableDiffusionConfig(
         vae=AutoencoderKLConfig(block_out_channels=(128, 256, 512, 512), latent_channels=4),
         unet=UNet2DConditionConfig(

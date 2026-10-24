@@ -70,6 +70,7 @@ class ViTConfig(BaseModelConfig):
     attention_dropout_rate: float = 0.0
     classifier: str = "token"  # 'token', 'gap', or 'none'
     act_layer: str = "gelu"
+    layer_norm_eps: float = 1e-6
 
 
 @dataclass
@@ -89,6 +90,7 @@ class MAEConfig(BaseModelConfig):
     decoder_mlp_ratio: float = 4.0
     mask_ratio: float = 0.75
     norm_pix_loss: bool = True
+    layer_norm_eps: float = 1e-6
 
 
 @dataclass

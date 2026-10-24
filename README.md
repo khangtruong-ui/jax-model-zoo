@@ -38,6 +38,7 @@ A high-performance, pip-installable JAX model library containing modern computer
 
 ## Installation
 
+### Standard Installation
 Install in editable mode from source:
 ```bash
 git clone https://github.com/khangtruong-ui/jax-model-zoo.git
@@ -45,9 +46,62 @@ cd jax-model-zoo
 pip install -e .
 ```
 
-To include all optional generative and weight conversion dependencies (e.g. `diffusers`, `torch`, `torchvision`, `safetensors`, `timm`):
+### Optional Dependencies
+- **PyTorch & Interop (`torch`, `diffusers`, `transformers`, `timm`)**:
+  ```bash
+  pip install -e ".[torch]"
+  ```
+- **TPU Installation (`tpulib` / `libtpu` and `jax[tpu]`)**:
+  ```bash
+  pip install -e ".[tpu]"
+  ```
+- **CUDA / GPU Installation (`jax[cuda12]`)**:
+  ```bash
+  pip install -e ".[cuda]"
+  ```
+- **All Core, PyTorch, Checkpoint, and Test Dependencies**:
+  ```bash
+  pip install -e ".[all]"
+  ```
+
+---
+
+## Pretrained Online Checkpoints & Registry
+
+All backbone models in `jax-model-zoo` load official pretrained weights **directly from reputable online sources** (HuggingFace Hub, timm, diffusers). **There is no local random initialization for backbones** when `pretrained=True`.
+
+### Model Catalog
+
+| Model Name | Canonical Alias | Online Reputable Source | Default Input Shape | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **ViT-Base** | `vit-b` | [`google/vit-base-patch16-224`](https://huggingface.co/google/vit-base-patch16-224) | `(1, 224, 224, 3)` | 12 layers, 768 width, 12 heads, patch 16 |
+| **ViT-Large** | `vit-l` | [`google/vit-large-patch16-224`](https://huggingface.co/google/vit-large-patch16-224) | `(1, 224, 224, 3)` | 24 layers, 1024 width, 16 heads, patch 16 |
+| **MAE Base** | `mae-base` | [`facebook/vit-mae-base`](https://huggingface.co/facebook/vit-mae-base) | `(1, 224, 224, 3)` | 12-layer ViT encoder + 8-layer decoder |
+| **MAE Large** | `mae-large` | [`facebook/vit-mae-large`](https://huggingface.co/facebook/vit-mae-large) | `(1, 224, 224, 3)` | 24-layer ViT encoder + 8-layer decoder |
+| **EfficientNet-B2** | `efficientnet-b2` | `timm/efficientnet_b2.ra_in1k` | `(1, 288, 288, 3)` | ImageNet-1k pretrained, 288x288 input |
+| **CLIP ViT-B/32** | `clip-vit-base-patch32` | [`openai/clip-vit-base-patch32`](https://huggingface.co/openai/clip-vit-base-patch32) | `(1, 224, 224, 3)` | Multimodal vision & text dual encoder |
+| **CLIP ViT-B/16** | `clip-vit-base-patch16` | [`openai/clip-vit-base-patch16`](https://huggingface.co/openai/clip-vit-base-patch16) | `(1, 224, 224, 3)` | Multimodal vision & text dual encoder |
+| **CLIP ViT-L/14** | `clip-vit-large-patch14` | [`openai/clip-vit-large-patch14`](https://huggingface.co/openai/clip-vit-large-patch14) | `(1, 224, 224, 3)` | High-capacity multimodal dual encoder |
+| **Stable Diffusion v1.5** | `stable-diffusion-v1-5` | [`runwayml/stable-diffusion-v1-5`](https://huggingface.co/runwayml/stable-diffusion-v1-5) | `(1, 512, 512, 3)` | AutoencoderKL VAE + UNet2DConditionModel |
+| **Stable Diffusion Efficient** | `stable-diffusion-efficient` | [`nota-ai/bk-sdm-small`](https://huggingface.co/nota-ai/bk-sdm-small) | `(1, 512, 512, 3)` | Block-pruned efficient SD (Tiny-SD) |
+| **DiffusionDiff** | `diffusion-diff` | [`ai-detection-unet-gpu`](https://github.com/khangtruong-ui/ai-detection-unet-gpu) | `(1, 256, 256, 3)` | DiffusionDiff (V1, V2, Minimized 84-ch Z) |
+
+### CLI Checkpoint Downloader
+
+You can download, convert, and verify any or all checkpoints directly from the CLI:
+
 ```bash
-pip install -e .[all]
+# List all models and official online links
+python scripts/download_weights.py --list
+
+# Download and convert ViT-Base to topology-agnostic Safetensors
+python scripts/download_weights.py --model vit-b --output-dir ./checkpoints
+
+# Download and convert CLIP and EfficientNet-B2
+python scripts/download_weights.py --model clip-vit-base-patch32,efficientnet-b2 --output-dir ./checkpoints
+
+# Download all online models
+python scripts/download_weights.py --model all --output-dir ./checkpoints
 ```
 
 ---
@@ -320,6 +374,23 @@ sharded_x = shard_batch(batched_images)
 parallel_apply = create_data_parallel_apply(model.apply)
 sharded_outputs = parallel_apply(replicated_params, sharded_x)
 ```
+
+---
+
+## Numerical Parity Verification vs PyTorch Reference Backbones
+
+Every architecture in `jax-model-zoo` includes rigorous end-to-end tensor and embedding parity tests that download the real online checkpoint and verify numerical identity against PyTorch:
+
+```bash
+# Run online backbone parity tests with timeout guards
+pytest tests/test_online_backbone_parity.py -v
+```
+
+Parity highlights:
+- **ViT-Base (`google/vit-base-patch16-224`)**: Top-5 ImageNet predictions match 100%, logit diff < 0.02 across all 1000 classes.
+- **EfficientNet-B2 (`timm/efficientnet_b2`)**: End-to-end logit diff < 1e-4 across all 1000 classes.
+- **CLIP ViT-B/32 (`openai/clip-vit-base-patch32`)**: Vision feature diff < 1e-6, text feature diff < 1e-6.
+- **MAE (`facebook/vit-mae-base`)**: Full unmasked ViT encoder representations match PyTorch reference.
 
 ---
 

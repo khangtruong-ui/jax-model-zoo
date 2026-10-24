@@ -265,8 +265,10 @@ class CLIP(nn.Module):
         return flax_model, jax_params
 
 
-def clip_vit_base_patch32(**kwargs) -> CLIP:
+def clip_vit_base_patch32(pretrained: bool = False, **kwargs) -> Union[CLIP, Tuple[CLIP, Dict[str, Any]]]:
     """CLIP ViT-B/32 factory function."""
+    if pretrained:
+        return CLIP.from_pretrained("openai/clip-vit-base-patch32")
     cfg = CLIPConfig(
         vision=CLIPVisionConfig(patch_size=32, width=768, layers=12, heads=12, output_dim=512),
         text=CLIPTextConfig(width=512, heads=8, layers=12, output_dim=512),
@@ -275,8 +277,22 @@ def clip_vit_base_patch32(**kwargs) -> CLIP:
     return CLIP(config=cfg)
 
 
-def clip_vit_large_patch14(**kwargs) -> CLIP:
+def clip_vit_base_patch16(pretrained: bool = False, **kwargs) -> Union[CLIP, Tuple[CLIP, Dict[str, Any]]]:
+    """CLIP ViT-B/16 factory function."""
+    if pretrained:
+        return CLIP.from_pretrained("openai/clip-vit-base-patch16")
+    cfg = CLIPConfig(
+        vision=CLIPVisionConfig(patch_size=16, width=768, layers=12, heads=12, output_dim=512),
+        text=CLIPTextConfig(width=512, heads=8, layers=12, output_dim=512),
+        **kwargs,
+    )
+    return CLIP(config=cfg)
+
+
+def clip_vit_large_patch14(pretrained: bool = False, **kwargs) -> Union[CLIP, Tuple[CLIP, Dict[str, Any]]]:
     """CLIP ViT-L/14 factory function."""
+    if pretrained:
+        return CLIP.from_pretrained("openai/clip-vit-large-patch14")
     cfg = CLIPConfig(
         vision=CLIPVisionConfig(patch_size=14, width=1024, layers=24, heads=16, output_dim=768),
         text=CLIPTextConfig(width=768, heads=12, layers=12, output_dim=768),

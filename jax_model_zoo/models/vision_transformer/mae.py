@@ -115,10 +115,11 @@ class MaskedAutoencoder(nn.Module):
                 dim=self.config.embed_dim,
                 num_heads=self.config.num_heads,
                 mlp_ratio=self.config.mlp_ratio,
+                layer_norm_eps=self.config.layer_norm_eps,
                 name=f"encoder_block_{i}",
             )(latent, deterministic=deterministic)
 
-        latent = nn.LayerNorm(name="encoder_norm")(latent)
+        latent = nn.LayerNorm(epsilon=self.config.layer_norm_eps, name="encoder_norm")(latent)
 
         # 6. Decoder projection
         dec_latent = nn.Dense(self.config.decoder_embed_dim, name="decoder_embed")(latent)
@@ -153,10 +154,11 @@ class MaskedAutoencoder(nn.Module):
                 dim=self.config.decoder_embed_dim,
                 num_heads=self.config.decoder_num_heads,
                 mlp_ratio=self.config.decoder_mlp_ratio,
+                layer_norm_eps=self.config.layer_norm_eps,
                 name=f"decoder_block_{i}",
             )(x_dec, deterministic=deterministic)
 
-        x_dec = nn.LayerNorm(name="decoder_norm")(x_dec)
+        x_dec = nn.LayerNorm(epsilon=self.config.layer_norm_eps, name="decoder_norm")(x_dec)
 
         # 10. Predict patch pixels
         patch_dim = (self.config.patch_size ** 2) * self.config.in_channels
@@ -202,15 +204,16 @@ class MaskedAutoencoder(nn.Module):
                 dim=self.config.embed_dim,
                 num_heads=self.config.num_heads,
                 mlp_ratio=self.config.mlp_ratio,
+                layer_norm_eps=self.config.layer_norm_eps,
                 name=f"encoder_block_{i}",
             )(latent, deterministic=deterministic)
 
-        return nn.LayerNorm(name="encoder_norm")(latent)
+        return nn.LayerNorm(epsilon=self.config.layer_norm_eps, name="encoder_norm")(latent)
 
     @classmethod
     def from_pretrained(
         cls,
-        model_name: str = "facebook/mae-vit-base",
+        model_name: str = "facebook/vit-mae-base",
     ) -> Tuple[MaskedAutoencoder, Dict[str, Any]]:
         """Load pretrained MAE weights directly from HuggingFace."""
         from transformers import ViTMAEForPreTraining
@@ -226,19 +229,24 @@ class MaskedAutoencoder(nn.Module):
             decoder_embed_dim=torch_model.config.decoder_hidden_size,
             decoder_depth=torch_model.config.decoder_num_hidden_layers,
             decoder_num_heads=torch_model.config.decoder_num_attention_heads,
+            layer_norm_eps=getattr(torch_model.config, "layer_norm_eps", 1e-12),
         )
         flax_model = cls(config=cfg)
         jax_params = convert_torch_mae_to_jax(torch_model.state_dict(), cfg)
         return flax_model, jax_params
 
 
-def mae_vit_base_patch16(**kwargs) -> MaskedAutoencoder:
-    """MAE ViT-Base factory."""
+def mae_vit_base_patch16(pretrained: bool = False, **kwargs) -> Union[MaskedAutoencoder, Tuple[MaskedAutoencoder, Dict[str, Any]]]:
+    """MAE ViT-Base factory function."""
+    if pretrained:
+        return MaskedAutoencoder.from_pretrained("facebook/vit-mae-base")
     cfg = MAEConfig(embed_dim=768, depth=12, num_heads=12, **kwargs)
     return MaskedAutoencoder(config=cfg)
 
 
-def mae_vit_large_patch16(**kwargs) -> MaskedAutoencoder:
-    """MAE ViT-Large factory."""
+def mae_vit_large_patch16(pretrained: bool = False, **kwargs) -> Union[MaskedAutoencoder, Tuple[MaskedAutoencoder, Dict[str, Any]]]:
+    """MAE ViT-Large factory function."""
+    if pretrained:
+        return MaskedAutoencoder.from_pretrained("facebook/vit-mae-large")
     cfg = MAEConfig(embed_dim=1024, depth=24, num_heads=16, **kwargs)
     return MaskedAutoencoder(config=cfg)
