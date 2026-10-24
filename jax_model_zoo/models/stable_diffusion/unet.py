@@ -95,7 +95,7 @@ class CrossAttention(nn.Module):
         k = jnp.swapaxes(k, 1, 2)  # [B, heads, N_k, dim_head]
         v = jnp.swapaxes(v, 1, 2)  # [B, heads, N_k, dim_head]
 
-        scale = 1.0 / np.sqrt(self.dim_head)
+        scale = jnp.array(1.0 / np.sqrt(self.dim_head), dtype=q.dtype)
         scores = jnp.matmul(q, jnp.swapaxes(k, -1, -2)) * scale
         weights = jax.nn.softmax(scores, axis=-1)
 

@@ -24,7 +24,6 @@ class CLIPAttention(nn.Module):
     def __call__(self, x: jax.Array, mask: Optional[jax.Array] = None) -> jax.Array:
         b, seq_len, _ = x.shape
         head_dim = self.d_model // self.n_head
-        scale = 1.0 / np.sqrt(head_dim)
 
         q = nn.Dense(self.d_model, name="q_proj")(x)
         k = nn.Dense(self.d_model, name="k_proj")(x)
@@ -34,6 +33,7 @@ class CLIPAttention(nn.Module):
         k = k.reshape((b, seq_len, self.n_head, head_dim)).swapaxes(1, 2)
         v = v.reshape((b, seq_len, self.n_head, head_dim)).swapaxes(1, 2)
 
+        scale = jnp.array(1.0 / np.sqrt(head_dim), dtype=q.dtype)
         scores = jnp.matmul(q, k.swapaxes(-1, -2)) * scale
         if mask is not None:
             scores = scores + mask

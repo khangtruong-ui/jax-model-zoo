@@ -50,7 +50,7 @@ class ViTAttention(nn.Module):
         qkv = jnp.transpose(qkv, (2, 0, 3, 1, 4))  # [3, B, num_heads, N, head_dim]
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        scale = 1.0 / np.sqrt(head_dim)
+        scale = jnp.array(1.0 / np.sqrt(head_dim), dtype=q.dtype)
         attn_weights = jnp.matmul(q, jnp.swapaxes(k, -1, -2)) * scale
         attn_weights = jax.nn.softmax(attn_weights, axis=-1)
 

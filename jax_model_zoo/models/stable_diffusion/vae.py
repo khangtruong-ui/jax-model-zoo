@@ -102,7 +102,7 @@ class MidBlockAttention(nn.Module):
         k = nn.Dense(c, name="to_k")(normed)
         v = nn.Dense(c, name="to_v")(normed)
 
-        scale = 1.0 / np.sqrt(c)
+        scale = jnp.array(1.0 / np.sqrt(c), dtype=q.dtype)
         attn = jnp.matmul(q, jnp.swapaxes(k, -1, -2)) * scale
         attn = jax.nn.softmax(attn, axis=-1)
         out = jnp.matmul(attn, v)

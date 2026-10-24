@@ -33,6 +33,9 @@ A high-performance, pip-installable JAX model library containing modern computer
    - Accurate Jaxpr operation analysis estimating theoretical FLOPs, GMACs, and parameter counts.
 7. **Single-Host Multi-Device GPU / TPU Support**:
    - Data parallelism utilities (`replicate`, `unreplicate`, `shard_batch`, `create_data_parallel_apply`).
+8. **Precision & Mixed-Precision Numerical Stability (`float16` & `bfloat16`)**:
+   - Native numerical stability in reduced precision (`float16`, `bfloat16`, and mixed precision).
+   - Attention head scaling matrices, sinusoidal embeddings, and LoRA adaptation layers dynamically bind to query and parameter dtypes without implicit promotion or upcasting to `float32`.
 
 ---
 

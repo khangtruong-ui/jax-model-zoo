@@ -155,11 +155,12 @@ def inject_lora(
         if matches and v.ndim == 2:
             in_dim, out_dim = v.shape
             rng, rng_a = jax.random.split(rng)
-            lora_a = jax.random.normal(rng_a, (in_dim, rank)) * (1.0 / np.sqrt(rank))
+            scale = jnp.array(1.0 / np.sqrt(rank), dtype=v.dtype)
+            lora_a = jax.random.normal(rng_a, (in_dim, rank), dtype=v.dtype) * scale
             lora_b = jnp.zeros((rank, out_dim), dtype=v.dtype)
             new_flat[f"{parent_key}/lora_a"] = lora_a
             new_flat[f"{parent_key}/lora_b"] = lora_b
-            new_flat[f"{parent_key}/lora_scaling"] = jnp.array(alpha / float(rank), dtype=jnp.float32)
+            new_flat[f"{parent_key}/lora_scaling"] = jnp.array(alpha / float(rank), dtype=v.dtype)
 
     return unflatten_nested_dict(new_flat, sep="/")
 
